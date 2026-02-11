@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import threading
+import requests
 import websockets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,7 +35,7 @@ def load_state():
             return data
     return {
         "symbols": set(["BTCUSDT"]),
-        "threshold": 3.0,
+        "threshold": 5.0,  # поріг памп/дамп
         "timeframe": "5m",
         "last_alert": {}
     }
@@ -172,6 +173,35 @@ async def reset_ws(app):
             pass
     ws_task = app.create_task(ws_listener(app))
 
+# ===== Auto-update liquid symbols =====
+async def update_symbols_task(app):
+    while True:
+        try:
+            info = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=10).json()
+            tickers = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10).json()
+            volumes = {t["symbol"]: float(t["quoteVolume"]) for t in tickers}
+
+            symbols = []
+            for s in info["symbols"]:
+                symbol = s["symbol"]
+                if (
+                    s["contractType"] == "PERPETUAL"
+                    and s["quoteAsset"] == "USDT"
+                    and s["status"] == "TRADING"
+                    and volumes.get(symbol, 0) >= 20_000_000  # мінімальний обсяг 20 млн
+                ):
+                    symbols.append(symbol)
+
+            state["symbols"] = set(symbols)
+            save_state(state)
+            print(f"🔄 Updated {len(symbols)} liquid symbols")
+            await reset_ws(app)
+
+        except Exception as e:
+            print("Error updating symbols:", e)
+
+        await asyncio.sleep(3600)  # раз на годину
+
 # ===== Main =====
 def main():
     if not TOKEN:
@@ -184,6 +214,7 @@ def main():
 
     async def post_init(app):
         await reset_ws(app)
+        app.create_task(update_symbols_task(app))
 
     app.post_init = post_init
     app.run_polling()
