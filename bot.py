@@ -199,7 +199,7 @@ async def update_symbols_task(app):
                     s["contractType"] == "PERPETUAL"
                     and s["quoteAsset"] == "USDT"
                     and s["status"] == "TRADING"
-                    and volumes.get(symbol, 0) >= 20_000_000
+                    and volumes.get(symbol, 0) >= 100_000
                 ):
                     symbols.append(symbol)
 
