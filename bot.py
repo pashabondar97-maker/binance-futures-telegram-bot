@@ -1,41 +1,25 @@
 import asyncio
 import json
 import os
-import threading
 import requests
 import websockets
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
 STATE_FILE = "state.json"
 
-# ===== Simple HTTP server for Render =====
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Binance Futures Telegram Bot is running")
-
-def start_http_server():
-    port = int(os.getenv("PORT", 5000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    print(f"HTTP server running on port {port}")
-    server.serve_forever()
-
-threading.Thread(target=start_http_server, daemon=True).start()
-
-# ===== State =====
+# ===== State management =====
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             data["symbols"] = set(data.get("symbols", []))
+            data["last_alert"] = data.get("last_alert", {})
             return data
     return {
         "symbols": set(["BTCUSDT"]),
-        "threshold": 5.0,  # поріг памп/дамп
+        "threshold": 5.0,
         "timeframe": "5m",
         "last_alert": {}
     }
@@ -52,7 +36,7 @@ def save_state(state):
 
 state = load_state()
 
-# ===== UI =====
+# ===== Telegram Menu =====
 def menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати монету", callback_data="add"),
@@ -64,7 +48,7 @@ def menu():
         [InlineKeyboardButton("📊 Статус", callback_data="status")]
     ])
 
-# ===== Telegram =====
+# ===== Telegram Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.chat_id = update.effective_chat.id
     context.user_data["awaiting"] = None
@@ -126,7 +110,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["awaiting"] = None
 
-# ===== WebSocket =====
+# ===== WebSocket Listener =====
 ws_task = None
 
 async def ws_listener(app):
@@ -149,12 +133,17 @@ async def ws_listener(app):
                     open_time = str(k["t"])
                     change = (close_p - open_p) / open_p * 100
 
-                    last_time = state["last_alert"].get(symbol)
-                    if abs(change) >= state["threshold"] and last_time != open_time:
+                    last = state["last_alert"].get(symbol)
+                    if last:
+                        last_change, last_time = last
+                        if last_time == open_time:
+                            continue
+
+                    if abs(change) >= state["threshold"]:
                         direction = "🚀 ПАМП" if change > 0 else "📉 ДАМП"
                         text = f"{direction} {symbol} ({state['timeframe']})\nЗміна: {change:.2f}%"
                         await app.bot.send_message(chat_id=app.chat_id, text=text)
-                        state["last_alert"][symbol] = open_time
+                        state["last_alert"][symbol] = (change, open_time)
                         save_state(state)
 
         except asyncio.CancelledError:
@@ -188,7 +177,7 @@ async def update_symbols_task(app):
                     s["contractType"] == "PERPETUAL"
                     and s["quoteAsset"] == "USDT"
                     and s["status"] == "TRADING"
-                    and volumes.get(symbol, 0) >= 20_000_000  # мінімальний обсяг 20 млн
+                    and volumes.get(symbol, 0) >= 20_000_000
                 ):
                     symbols.append(symbol)
 
@@ -200,7 +189,7 @@ async def update_symbols_task(app):
         except Exception as e:
             print("Error updating symbols:", e)
 
-        await asyncio.sleep(3600)  # раз на годину
+        await asyncio.sleep(3600)
 
 # ===== Main =====
 def main():
@@ -213,11 +202,3 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     async def post_init(app):
-        await reset_ws(app)
-        app.create_task(update_symbols_task(app))
-
-    app.post_init = post_init
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
