@@ -167,4 +167,19 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def start_http():
+    server = HTTPServer(("0.0.0.0", int(os.getenv("PORT", 5000))), SimpleHandler)
+    server.serve_forever()
+
+threading.Thread(target=start_http, daemon=True).start()
+
     main()
