@@ -123,4 +123,70 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("Введи число", reply_markup=menu())
 
-    context.user_data["aw]()_
+    context.user_data["awaiting"] = None
+
+# ===== WebSocket =====
+ws_task = None
+
+async def ws_listener(app):
+    while True:
+        try:
+            if not state["symbols"]:
+                await asyncio.sleep(5)
+                continue
+
+            streams = "/".join([f"{s.lower()}@kline_{state['timeframe']}" for s in state["symbols"]])
+            url = f"wss://fstream.binance.com/stream?streams={streams}"
+
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                async for msg in ws:
+                    data = json.loads(msg)
+                    k = data["data"]["k"]
+                    symbol = data["data"]["s"]
+                    open_p = float(k["o"])
+                    close_p = float(k["c"])
+                    open_time = str(k["t"])
+                    change = (close_p - open_p) / open_p * 100
+
+                    last_time = state["last_alert"].get(symbol)
+                    if abs(change) >= state["threshold"] and last_time != open_time:
+                        direction = "🚀 ПАМП" if change > 0 else "📉 ДАМП"
+                        text = f"{direction} {symbol} ({state['timeframe']})\nЗміна: {change:.2f}%"
+                        await app.bot.send_message(chat_id=app.chat_id, text=text)
+                        state["last_alert"][symbol] = open_time
+                        save_state(state)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print("WS error:", e)
+            await asyncio.sleep(3)
+
+async def reset_ws(app):
+    global ws_task
+    if ws_task:
+        ws_task.cancel()
+        try:
+            await ws_task
+        except:
+            pass
+    ws_task = app.create_task(ws_listener(app))
+
+# ===== Main =====
+def main():
+    if not TOKEN:
+        raise RuntimeError("TOKEN env var is not set")
+
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(on_button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+
+    async def post_init(app):
+        await reset_ws(app)
+
+    app.post_init = post_init
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
