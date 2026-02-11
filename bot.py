@@ -1,13 +1,31 @@
 import asyncio
 import json
 import os
+import threading
 import websockets
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
 STATE_FILE = "state.json"
 
+# ===== Simple HTTP server for Render =====
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Binance Futures Telegram Bot is running")
+
+def start_http_server():
+    port = int(os.getenv("PORT", 5000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    print(f"HTTP server running on port {port}")
+    server.serve_forever()
+
+threading.Thread(target=start_http_server, daemon=True).start()
+
+# ===== State =====
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -33,6 +51,7 @@ def save_state(state):
 
 state = load_state()
 
+# ===== UI =====
 def menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати монету", callback_data="add"),
@@ -44,6 +63,7 @@ def menu():
         [InlineKeyboardButton("📊 Статус", callback_data="status")]
     ])
 
+# ===== Telegram =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.chat_id = update.effective_chat.id
     context.user_data["awaiting"] = None
@@ -103,83 +123,4 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("Введи число", reply_markup=menu())
 
-    context.user_data["awaiting"] = None
-
-ws_task = None
-
-async def ws_listener(app):
-    while True:
-        try:
-            if not state["symbols"]:
-                await asyncio.sleep(5)
-                continue
-
-            streams = "/".join([f"{s.lower()}@kline_{state['timeframe']}" for s in state["symbols"]])
-            url = f"wss://fstream.binance.com/stream?streams={streams}"
-
-            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                async for msg in ws:
-                    data = json.loads(msg)
-                    k = data["data"]["k"]
-                    symbol = data["data"]["s"]
-                    open_p = float(k["o"])
-                    close_p = float(k["c"])
-                    open_time = str(k["t"])
-                    change = (close_p - open_p) / open_p * 100
-
-                    last_time = state["last_alert"].get(symbol)
-                    if abs(change) >= state["threshold"] and last_time != open_time:
-                        direction = "🚀 ПАМП" if change > 0 else "📉 ДАМП"
-                        text = f"{direction} {symbol} ({state['timeframe']})\nЗміна: {change:.2f}%"
-                        await app.bot.send_message(chat_id=app.chat_id, text=text)
-                        state["last_alert"][symbol] = open_time
-                        save_state(state)
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print("WS error:", e)
-            await asyncio.sleep(3)
-
-async def reset_ws(app):
-    global ws_task
-    if ws_task:
-        ws_task.cancel()
-        try:
-            await ws_task
-        except:
-            pass
-    ws_task = app.create_task(ws_listener(app))
-
-def main():
-    if not TOKEN:
-        raise RuntimeError("TOKEN env var is not set")
-
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(on_button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-
-    async def post_init(app):
-        await reset_ws(app)
-
-    app.post_init = post_init
-    app.run_polling()
-
-if __name__ == "__main__":
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-def start_http():
-    server = HTTPServer(("0.0.0.0", int(os.getenv("PORT", 5000))), SimpleHandler)
-    server.serve_forever()
-
-threading.Thread(target=start_http, daemon=True).start()
-
-    main()
+    context.user_data["aw]()_
