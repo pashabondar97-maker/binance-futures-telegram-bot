@@ -4,7 +4,14 @@ import os
 import requests
 import websockets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
 TOKEN = os.getenv("TOKEN")
 STATE_FILE = "state.json"
@@ -21,38 +28,48 @@ def load_state():
         "symbols": set(["BTCUSDT"]),
         "threshold": 5.0,
         "timeframe": "5m",
-        "last_alert": {}
+        "last_alert": {},
     }
+
 
 def save_state(state):
     data = {
         "symbols": list(state["symbols"]),
         "threshold": state["threshold"],
         "timeframe": state["timeframe"],
-        "last_alert": state["last_alert"]
+        "last_alert": state["last_alert"],
     }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
 
 state = load_state()
 
 # ===== Telegram Menu =====
 def menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Додати монету", callback_data="add"),
-         InlineKeyboardButton("🗑 Прибрати монету", callback_data="remove")],
-        [InlineKeyboardButton("🎯 Встановити %", callback_data="set_threshold")],
-        [InlineKeyboardButton("⏱ 5м", callback_data="tf_5m"),
-         InlineKeyboardButton("⏱ 15м", callback_data="tf_15m"),
-         InlineKeyboardButton("⏱ 1г", callback_data="tf_1h")],
-        [InlineKeyboardButton("📊 Статус", callback_data="status")]
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("➕ Додати монету", callback_data="add"),
+                InlineKeyboardButton("🗑 Прибрати монету", callback_data="remove"),
+            ],
+            [InlineKeyboardButton("🎯 Встановити %", callback_data="set_threshold")],
+            [
+                InlineKeyboardButton("⏱ 5м", callback_data="tf_5m"),
+                InlineKeyboardButton("⏱ 15м", callback_data="tf_15m"),
+                InlineKeyboardButton("⏱ 1г", callback_data="tf_1h"),
+            ],
+            [InlineKeyboardButton("📊 Статус", callback_data="status")],
+        ]
+    )
+
 
 # ===== Telegram Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.chat_id = update.effective_chat.id
     context.user_data["awaiting"] = None
     await update.message.reply_text("🤖 Керування ботом:", reply_markup=menu())
+
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -81,8 +98,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "status":
         await q.edit_message_text(
             f"📊 Статус:\nМонети: {', '.join(state['symbols'])}\nПоріг: {state['threshold']}%\nTF: {state['timeframe']}",
-            reply_markup=menu()
+            reply_markup=menu(),
         )
+
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting = context.user_data.get("awaiting")
@@ -110,8 +128,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["awaiting"] = None
 
+
 # ===== WebSocket Listener =====
 ws_task = None
+
 
 async def ws_listener(app):
     while True:
@@ -152,6 +172,7 @@ async def ws_listener(app):
             print("WS error:", e)
             await asyncio.sleep(3)
 
+
 async def reset_ws(app):
     global ws_task
     if ws_task:
@@ -161,6 +182,7 @@ async def reset_ws(app):
         except:
             pass
     ws_task = app.create_task(ws_listener(app))
+
 
 # ===== Auto-update liquid symbols =====
 async def update_symbols_task(app):
@@ -191,6 +213,7 @@ async def update_symbols_task(app):
 
         await asyncio.sleep(3600)
 
+
 # ===== Main =====
 def main():
     if not TOKEN:
@@ -201,4 +224,16 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
+    # ===== Post init tasks =====
     async def post_init(app):
+        await reset_ws(app)
+        app.create_task(update_symbols_task(app))
+
+    app.post_init = post_init
+
+    # ✅ Для Render Worker: polling без webhooks
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
