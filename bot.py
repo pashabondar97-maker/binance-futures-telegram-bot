@@ -5,11 +5,9 @@ import websockets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# ===== Config =====
-TOKEN = os.getenv("TOKEN")  # set in Render Environment Variables
+TOKEN = os.getenv("TOKEN")
 STATE_FILE = "state.json"
 
-# ===== State =====
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -19,7 +17,7 @@ def load_state():
     return {
         "symbols": set(["BTCUSDT"]),
         "threshold": 3.0,
-        "timeframe": "5m",  # 5m, 15m, 1h
+        "timeframe": "5m",
         "last_alert": {}
     }
 
@@ -35,7 +33,6 @@ def save_state(state):
 
 state = load_state()
 
-# ===== UI =====
 def menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Додати монету", callback_data="add"),
@@ -47,10 +44,9 @@ def menu():
         [InlineKeyboardButton("📊 Статус", callback_data="status")]
     ])
 
-# ===== Telegram Handlers =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["awaiting"] = None
     context.application.chat_id = update.effective_chat.id
+    context.user_data["awaiting"] = None
     await update.message.reply_text("🤖 Керування ботом:", reply_markup=menu())
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,7 +56,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "add":
         context.user_data["awaiting"] = "add"
-        await q.edit_message_text("Введи монету (наприклад BTCUSDT):")
+        await q.edit_message_text("Введи монету (BTCUSDT):")
 
     elif data == "remove":
         context.user_data["awaiting"] = "remove"
@@ -68,21 +64,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "set_threshold":
         context.user_data["awaiting"] = "threshold"
-        await q.edit_message_text("Введи % (наприклад 3):")
+        await q.edit_message_text("Введи %:")
 
     elif data.startswith("tf_"):
         tf = data.replace("tf_", "")
         state["timeframe"] = tf
         save_state(state)
         await reset_ws(context.application)
-        await q.edit_message_text(f"⏱ Таймфрейм встановлено: {tf}", reply_markup=menu())
+        await q.edit_message_text(f"⏱ Таймфрейм: {tf}", reply_markup=menu())
 
     elif data == "status":
         await q.edit_message_text(
-            f"📊 Статус:\n"
-            f"Монети: {', '.join(state['symbols']) or '—'}\n"
-            f"Поріг: {state['threshold']}%\n"
-            f"TF: {state['timeframe']}",
+            f"📊 Статус:\nМонети: {', '.join(state['symbols'])}\nПоріг: {state['threshold']}%\nTF: {state['timeframe']}",
             reply_markup=menu()
         )
 
@@ -108,11 +101,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_state(state)
             await update.message.reply_text(f"🎯 Поріг: {state['threshold']}%", reply_markup=menu())
         except:
-            await update.message.reply_text("❌ Введи число, наприклад 3", reply_markup=menu())
+            await update.message.reply_text("Введи число", reply_markup=menu())
 
     context.user_data["awaiting"] = None
 
-# ===== WebSocket =====
 ws_task = None
 
 async def ws_listener(app):
@@ -130,23 +122,15 @@ async def ws_listener(app):
                     data = json.loads(msg)
                     k = data["data"]["k"]
                     symbol = data["data"]["s"]
-
                     open_p = float(k["o"])
                     close_p = float(k["c"])
                     open_time = str(k["t"])
-
                     change = (close_p - open_p) / open_p * 100
-                    last_time = state["last_alert"].get(symbol)
 
+                    last_time = state["last_alert"].get(symbol)
                     if abs(change) >= state["threshold"] and last_time != open_time:
                         direction = "🚀 ПАМП" if change > 0 else "📉 ДАМП"
-                        text = (
-                            f"{direction} ({state['timeframe']})\n"
-                            f"{symbol} Futures\n"
-                            f"Open: {open_p}\n"
-                            f"Price: {close_p}\n"
-                            f"Зміна: {change:.2f}%"
-                        )
+                        text = f"{direction} {symbol} ({state['timeframe']})\nЗміна: {change:.2f}%"
                         await app.bot.send_message(chat_id=app.chat_id, text=text)
                         state["last_alert"][symbol] = open_time
                         save_state(state)
@@ -167,7 +151,6 @@ async def reset_ws(app):
             pass
     ws_task = app.create_task(ws_listener(app))
 
-# ===== Main =====
 def main():
     if not TOKEN:
         raise RuntimeError("TOKEN env var is not set")
@@ -177,10 +160,10 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    async def _post_init(app):
+    async def post_init(app):
         await reset_ws(app)
 
-    app.post_init = _post_init
+    app.post_init = post_init
     app.run_polling()
 
 if __name__ == "__main__":
